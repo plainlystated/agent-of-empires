@@ -282,6 +282,7 @@ impl PluginManagerDialog {
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(theme.accent));
         let inner = block.inner(rect);
         f.render_widget(block, rect);

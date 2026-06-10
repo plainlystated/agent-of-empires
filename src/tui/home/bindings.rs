@@ -757,10 +757,27 @@ pub fn parse_chord(s: &str) -> Option<Chord> {
     None
 }
 
+/// Bare (non-ctrl) characters owned by the navigation/structural key block
+/// in `dispatch_action_key`. Plugin bindings run before that block, so these
+/// chords are rejected at table build to keep list movement, group folding,
+/// and resize working regardless of what a manifest declares.
+const RESERVED_STRUCTURAL_CHARS: &[char] = &['j', 'k', 'h', 'l', 'G', '<', '>', '{', '}'];
+
+fn chord_is_reserved(chord: &Chord) -> bool {
+    !chord.ctrl && matches!(chord.code, KeyCode::Char(c) if RESERVED_STRUCTURAL_CHARS.contains(&c))
+}
+
+/// True when this chord must not fire in strict mode: bare lowercase letters
+/// are reserved for the typing guard there (the no-destructive-lowercase
+/// contract at the top of this file), for plugins exactly like for core.
+fn chord_blocked_in_strict(chord: &Chord) -> bool {
+    !chord.ctrl && matches!(chord.code, KeyCode::Char(c) if c.is_ascii_lowercase())
+}
+
 /// Build the runtime plugin-binding table from the active plugin set, sorted
-/// by priority (desc) then plugin id. Invalid chords and references to
-/// undeclared actions are skipped (manifest validation already rejects the
-/// latter at load).
+/// by priority (desc) then plugin id. Invalid chords, reserved structural
+/// chords, and references to undeclared actions are skipped (manifest
+/// validation already rejects the latter at load).
 pub fn plugin_bindings() -> Vec<PluginBinding> {
     let registry = crate::plugin::registry();
     let mut out = Vec::new();
@@ -770,6 +787,10 @@ pub fn plugin_bindings() -> Vec<PluginBinding> {
                 tracing::warn!(target: "plugin", plugin = plugin.id(), chord = %kb.chord, "unparseable keybind chord; skipped");
                 continue;
             };
+            if chord_is_reserved(&chord) {
+                tracing::warn!(target: "plugin", plugin = plugin.id(), chord = %kb.chord, "chord is a reserved navigation key; skipped");
+                continue;
+            }
             let Some(action) = plugin.manifest.actions.iter().find(|a| a.name == kb.action) else {
                 continue;
             };
@@ -793,20 +814,30 @@ pub fn plugin_bindings() -> Vec<PluginBinding> {
 
 /// Resolve a key against the plugin table. Call only after core [`resolve`]
 /// returned `None`, so core chords shadow plugin chords by construction.
-pub fn resolve_plugin(key: &KeyEvent, table: &[PluginBinding]) -> Option<PluginBinding> {
-    table.iter().find(|b| chord_matches(&b.chord, key)).cloned()
+/// In strict mode bare-lowercase plugin chords never fire; those keys belong
+/// to the typing guard.
+pub fn resolve_plugin(
+    key: &KeyEvent,
+    strict: bool,
+    table: &[PluginBinding],
+) -> Option<PluginBinding> {
+    table
+        .iter()
+        .find(|b| !(strict && chord_blocked_in_strict(&b.chord)) && chord_matches(&b.chord, key))
+        .cloned()
 }
 
-/// The core action (if any) that shadows `chord` in the given mode, for the
-/// conflict inspector: a plugin binding on this chord never fires there.
-pub fn shadowing_core_action(chord: &Chord, strict: bool) -> Option<ActionId> {
+/// The core binding (if any) whose chord matches in the given mode, with its
+/// context guard, for the conflict inspector: a plugin binding on this chord
+/// never fires while that context holds.
+pub fn shadowing_core_action(chord: &Chord, strict: bool) -> Option<(ActionId, Context)> {
     for b in BINDINGS {
         let chords = if strict { b.strict } else { b.non_strict };
         if chords
             .iter()
             .any(|c| c.code == chord.code && c.ctrl == chord.ctrl)
         {
-            return Some(b.id);
+            return Some((b.id, b.context));
         }
     }
     None

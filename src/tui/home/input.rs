@@ -2155,8 +2155,12 @@ impl HomeView {
         }
 
         // Plugin-contributed keybinds, chained after the core table so core
-        // chords always shadow plugin chords.
-        if let Some(binding) = bindings::resolve_plugin(&key, &bindings::plugin_bindings()) {
+        // chords always shadow plugin chords. Reserved navigation chords are
+        // rejected at table build, and bare-lowercase chords never fire in
+        // strict mode (the typing guard below keeps owning them).
+        if let Some(binding) =
+            bindings::resolve_plugin(&key, self.strict_hotkeys, &bindings::plugin_bindings())
+        {
             let params = serde_json::json!({ "session_id": self.selected_session.clone() });
             match crate::plugin::runtime::invoke_action(
                 &binding.plugin_id,

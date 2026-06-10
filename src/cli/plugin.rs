@@ -155,10 +155,17 @@ fn run_info(id: &str) -> Result<()> {
         for binding in mine {
             let mut shadow_notes = Vec::new();
             for (strict, label) in [(false, "non-strict"), (true, "strict")] {
-                if let Some(owner) =
+                if let Some((owner, context)) =
                     crate::tui::home::bindings::shadowing_core_action(&binding.chord, strict)
                 {
-                    shadow_notes.push(format!("shadowed by core {owner:?} in {label} mode"));
+                    // Context-guarded core bindings only own the chord while
+                    // their guard holds; say so instead of claiming a hard
+                    // conflict.
+                    let scope = match context {
+                        crate::tui::home::bindings::Context::Always => String::new(),
+                        guarded => format!(" while {guarded:?}"),
+                    };
+                    shadow_notes.push(format!("shadowed by core {owner:?} in {label} mode{scope}"));
                 }
             }
             let note = if shadow_notes.is_empty() {
