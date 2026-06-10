@@ -45,6 +45,7 @@ This document contains the help content for the `aoe` command-line program.
 * [`aoe plugin enable`↴](#aoe-plugin-enable)
 * [`aoe plugin disable`↴](#aoe-plugin-disable)
 * [`aoe plugin update`↴](#aoe-plugin-update)
+* [`aoe plugin hash`↴](#aoe-plugin-hash)
 * [`aoe settings`↴](#aoe-settings)
 * [`aoe settings explain`↴](#aoe-settings-explain)
 * [`aoe profile`↴](#aoe-profile)
@@ -665,6 +666,7 @@ Manage plugins (install, enable, disable, update)
 * `enable` — Enable a plugin's contributions
 * `disable` — Disable a plugin; its settings stay on disk for re-enabling
 * `update` — Update an installed plugin from its recorded source
+* `hash` — Print the tree hash of a plugin directory (used to pin featured releases)
 
 
 
@@ -753,6 +755,18 @@ Update an installed plugin from its recorded source
 ###### **Options:**
 
 * `--yes` — Skip the capability re-prompt when the declared set changed
+
+
+
+## `aoe plugin hash`
+
+Print the tree hash of a plugin directory (used to pin featured releases)
+
+**Usage:** `aoe plugin hash <PATH>`
+
+###### **Arguments:**
+
+* `<PATH>` — Path to a directory containing aoe-plugin.toml
 
 
 

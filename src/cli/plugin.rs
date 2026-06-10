@@ -5,6 +5,7 @@
 use anyhow::Result;
 use clap::Subcommand;
 
+use crate::plugin::featured::FeaturedValidation;
 use crate::plugin::grants::GrantStatus;
 use crate::plugin::install::{InstallOutcome, InstallPrompt};
 use crate::plugin::TrustLevel;
@@ -49,6 +50,11 @@ pub enum PluginCommands {
         #[arg(long)]
         yes: bool,
     },
+    /// Print the tree hash of a plugin directory (used to pin featured releases)
+    Hash {
+        /// Path to a directory containing aoe-plugin.toml
+        path: String,
+    },
 }
 
 pub fn run(command: PluginCommands) -> Result<()> {
@@ -60,7 +66,17 @@ pub fn run(command: PluginCommands) -> Result<()> {
         PluginCommands::Enable { id } => run_set_enabled(&id, true),
         PluginCommands::Disable { id } => run_set_enabled(&id, false),
         PluginCommands::Update { id, yes } => run_update(&id, yes),
+        PluginCommands::Hash { path } => run_hash(&path),
     }
+}
+
+fn run_hash(path: &str) -> Result<()> {
+    let dir = std::path::Path::new(path);
+    if !dir.join("aoe-plugin.toml").is_file() {
+        anyhow::bail!("no aoe-plugin.toml in {path:?}; point at a plugin directory");
+    }
+    println!("{}", crate::plugin::integrity::tree_hash(dir)?);
+    Ok(())
 }
 
 fn trust_label(trust: TrustLevel) -> &'static str {
@@ -199,6 +215,18 @@ fn prompt_for_capabilities(prompt: &InstallPrompt) -> bool {
     );
     if !prompt.description.is_empty() {
         println!("  {}", prompt.description);
+    }
+    match prompt.featured {
+        FeaturedValidation::Verified => {
+            println!("  Featured plugin: this release matches its hash validated by the AoE maintainers.");
+        }
+        FeaturedValidation::UnknownVersion => {
+            println!(
+                "  Featured plugin, but v{} has no validated hash yet; treating it as unvalidated.",
+                prompt.version
+            );
+        }
+        FeaturedValidation::NotFeatured => {}
     }
     if let Some(prev) = &prompt.previous_capabilities {
         println!("\nDeclared capabilities CHANGED since you granted them:");

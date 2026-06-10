@@ -240,6 +240,8 @@ capabilities = ["events-subscribe", "pane-read"]
 
 A plugin update that changes its declared capability set no longer matches the stored hash and re-prompts.
 
+The manifest hash pins what the user approved; a second hash pins what is installed. `integrity::tree_hash` is a deterministic sha256 over the whole plugin directory (sorted relative paths plus file bytes, `.git` excluded), recorded in `plugins.lock` at install and update. It closes the gap manifest pinning cannot see: a release that changes worker code without touching the manifest still changes the tree hash, so `aoe plugin update` treats it as a real update rather than up to date. The curated featured index (`plugins/featured.toml`, embedded in the binary) pins vetted releases of community plugins to this tree hash; install and update refuse a pinned version whose fetched tree does not match, and mark a matching one as validated on the capability prompt. An unpinned newer version installs as ordinary unvalidated community code. Runtime permission prompts in the Android style were considered and rejected: without an OS sandbox they imply containment that does not exist, partial grants force every plugin to handle per-capability denial, and daemon workers have no natural prompt moment. The plugin-level all-or-nothing trust decision stays.
+
 ### Capability taxonomy v1
 
 Sized to what the first three plugins (status detection, attention sort, triage) plus the acceptance criteria need, nothing speculative:

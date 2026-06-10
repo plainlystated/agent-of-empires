@@ -16,6 +16,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use aoe_plugin_api::{Capability, PluginManifest};
 use chrono::Utc;
 
+use super::featured::FeaturedValidation;
 use super::grants::{manifest_hash, GrantStore};
 use super::lockfile::{LockRecord, Lockfile};
 use super::{PluginSource, TrustLevel};
@@ -34,6 +35,9 @@ pub struct InstallPrompt {
     pub source: PluginSource,
     /// Set on update when the previously granted capability set differs.
     pub previous_capabilities: Option<Vec<Capability>>,
+    /// Whether the staged tree matches the curated featured index (a hash
+    /// mismatch never reaches the prompt; it fails the install outright).
+    pub featured: FeaturedValidation,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -90,6 +94,7 @@ struct Staged {
     _tempdir: Option<tempfile::TempDir>,
     manifest: PluginManifest,
     manifest_raw: String,
+    tree_hash: String,
 }
 
 fn stage(source: &PluginSource) -> Result<Staged> {
@@ -118,12 +123,28 @@ fn stage(source: &PluginSource) -> Result<Staged> {
     let manifest_raw = std::fs::read_to_string(&manifest_path)
         .with_context(|| format!("no aoe-plugin.toml at {}", root.display()))?;
     let manifest = PluginManifest::from_toml_str(&manifest_raw)?;
+    let tree_hash = super::integrity::tree_hash(&root)?;
     Ok(Staged {
         root,
         _tempdir: tempdir,
         manifest,
         manifest_raw,
+        tree_hash,
     })
+}
+
+/// Check a staged tree against the curated featured index. Local-path
+/// installs are never featured; a pinned-hash mismatch is a hard error.
+fn featured_validation(source: &PluginSource, staged: &Staged) -> Result<FeaturedValidation> {
+    match source {
+        PluginSource::GitHub { slug } => super::featured::index().validate(
+            slug,
+            staged.manifest.id.as_str(),
+            &staged.manifest.version,
+            &staged.tree_hash,
+        ),
+        _ => Ok(FeaturedValidation::NotFeatured),
+    }
 }
 
 /// Install from a parsed source. `confirm` is called exactly once with the
@@ -143,6 +164,7 @@ pub fn install(
         }
     }
 
+    let featured = featured_validation(&source, &staged)?;
     let prompt = InstallPrompt {
         id: id.clone(),
         name: staged.manifest.name.clone(),
@@ -152,6 +174,7 @@ pub fn install(
         trust: source.trust_level(),
         source: source.clone(),
         previous_capabilities: None,
+        featured,
     };
     if !confirm(&prompt) {
         return Ok(InstallOutcome::Declined);
@@ -172,6 +195,7 @@ pub fn install(
                 version: staged.manifest.version.clone(),
                 source,
                 manifest_hash: hash,
+                tree_hash: staged.tree_hash.clone(),
                 installed_at: Utc::now(),
             },
         )?;
@@ -212,13 +236,16 @@ pub fn update(
             staged.manifest.id.as_str()
         );
     }
-    let new_hash = manifest_hash(staged.manifest_raw.as_bytes());
-    if new_hash == record.manifest_hash {
+    // Up-to-date means the whole TREE is unchanged, not just the manifest:
+    // a code-only release with an untouched manifest must still install.
+    if staged.tree_hash == record.tree_hash {
         return Ok(InstallOutcome::UpToDate {
             id: plugin_id.to_string(),
             version: record.version,
         });
     }
+    let featured = featured_validation(&record.source, &staged)?;
+    let new_hash = manifest_hash(staged.manifest_raw.as_bytes());
 
     let mut grants = GrantStore::load()?;
     let granted_caps = grants
@@ -239,6 +266,7 @@ pub fn update(
             trust: record.source.trust_level(),
             source: record.source.clone(),
             previous_capabilities: Some(granted_caps),
+            featured,
         };
         if !confirm(&prompt) {
             return Ok(InstallOutcome::Declined);
@@ -269,6 +297,7 @@ pub fn update(
                 version: staged.manifest.version.clone(),
                 source: record.source.clone(),
                 manifest_hash: new_hash.clone(),
+                tree_hash: staged.tree_hash.clone(),
                 installed_at: Utc::now(),
             },
         )

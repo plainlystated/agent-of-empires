@@ -194,6 +194,7 @@ export interface PluginCapabilityPrompt {
   previous_capabilities: string[] | null;
   trust: "builtin" | "community";
   source: string;
+  featured: "not_featured" | "verified" | "unknown_version";
   isolation_summary: string;
 }
 

@@ -114,6 +114,67 @@ fn test_settings_explain_resolves_plugin_default() {
 
 #[test]
 #[serial]
+fn test_install_and_update_track_tree_hash_not_just_manifest() {
+    let h = TuiTestHarness::new("plugin_tree_hash");
+    let source = tempfile::tempdir().expect("plugin source dir");
+    std::fs::write(
+        source.path().join("aoe-plugin.toml"),
+        r#"
+id = "acme.demo"
+name = "Demo"
+version = "1.0.0"
+api_version = 1
+description = "Tree hash e2e fixture."
+
+[[settings]]
+key = "verbose"
+label = "Verbose"
+widget = { kind = "toggle" }
+default = false
+"#,
+    )
+    .unwrap();
+    std::fs::write(source.path().join("notes.txt"), "v1").unwrap();
+    let dir = source.path().to_str().unwrap();
+
+    let install = h.run_cli(&["plugin", "install", dir, "--yes"]);
+    assert!(
+        install.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&install.stdout).contains("Installed acme.demo v1.0.0"),
+        "unexpected install output"
+    );
+
+    let same = h.run_cli(&["plugin", "update", "acme.demo", "--yes"]);
+    assert!(
+        String::from_utf8_lossy(&same.stdout).contains("up to date"),
+        "unchanged tree must be up to date:\n{}",
+        String::from_utf8_lossy(&same.stdout)
+    );
+
+    // Code-only change: the manifest is untouched but the tree differs, so
+    // the update must install it (and needs no capability re-prompt).
+    std::fs::write(source.path().join("notes.txt"), "v2").unwrap();
+    let changed = h.run_cli(&["plugin", "update", "acme.demo", "--yes"]);
+    assert!(
+        String::from_utf8_lossy(&changed.stdout).contains("Updated acme.demo to v1.0.0"),
+        "code-only change must update:\n{}",
+        String::from_utf8_lossy(&changed.stdout)
+    );
+
+    let uninstall = h.run_cli(&["plugin", "uninstall", "acme.demo"]);
+    assert!(
+        uninstall.status.success(),
+        "uninstall failed: {}",
+        String::from_utf8_lossy(&uninstall.stderr)
+    );
+}
+
+#[test]
+#[serial]
 fn test_builtin_worker_answers_status_batch() {
     let h = TuiTestHarness::new("plugin_worker_batch");
     let request = r#"{"jsonrpc":"2.0","id":1,"method":"status.detect_batch","params":{"snapshots":[{"session_id":"s1","agent":"codex","pane_text":"Working (esc to interrupt)"}]}}"#;

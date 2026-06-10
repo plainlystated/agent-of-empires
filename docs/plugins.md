@@ -50,6 +50,29 @@ controls what a plugin can ask aoe to do through its API. It is not an OS
 sandbox; a plugin's worker process runs with your user's permissions.
 OS-level isolation backends are planned and will tighten this over time.
 
+## Featured plugins
+
+Featured plugins are community plugins the AoE maintainers vouch for at
+specific releases. The binary ships a curated index (`plugins/featured.toml`
+in the repository) pinning each vetted version to a content hash of the
+whole plugin directory. Installing or updating a featured plugin verifies
+the fetched files against that pin:
+
+- Hash matches: the capability prompt marks the release as validated.
+- Hash mismatch for a pinned version: the install is refused outright; the
+  source may have been tampered with.
+- Version not in the index yet (newer than the last curation pass): it
+  installs as an ordinary, unvalidated community plugin and the prompt says
+  so.
+
+Updates compare the same tree hash, so `aoe plugin update` catches releases
+that change code without touching the manifest. To compute the hash for a
+release (for example to submit a plugin for featuring):
+
+```sh
+aoe plugin hash ./my-plugin
+```
+
 ## Plugin settings
 
 A plugin's settings render in the normal settings surfaces (TUI Settings

@@ -23,7 +23,7 @@ pub fn manifest_hash(manifest_bytes: &[u8]) -> String {
     format!("sha256:{}", hex_encode(&digest))
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
+pub(super) fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

@@ -101,6 +101,7 @@ describe("PluginsSettings contract", () => {
         previous_capabilities: null,
         trust: "community",
         source: "github:o/r",
+        featured: "verified",
         isolation_summary: "runs as a regular process",
       },
     });
@@ -119,6 +120,7 @@ describe("PluginsSettings contract", () => {
     expect(dialog.textContent).toContain("net-fetch");
     expect(dialog.textContent).toContain("fs-read");
     expect(dialog.textContent).toContain("not an OS sandbox");
+    expect(dialog.textContent).toContain("validated by the AoE maintainers");
 
     // Phase 2: approval re-sends with confirm_capabilities: true.
     fireEvent.click(await findByText("Approve and continue"));
@@ -141,6 +143,7 @@ describe("PluginsSettings contract", () => {
         previous_capabilities: null,
         trust: "community",
         source: "github:o/r",
+        featured: "not_featured",
         isolation_summary: "runs as a regular process",
       },
     });

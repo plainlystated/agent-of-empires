@@ -233,6 +233,16 @@ export function PluginsSettings() {
             {prompt.version}
           </p>
           <p className="mt-1 text-xs text-text-dim">{prompt.description}</p>
+          {prompt.featured === "verified" && (
+            <p className="mt-1 text-xs text-emerald-400">
+              Featured plugin: this release matches its hash validated by the AoE maintainers.
+            </p>
+          )}
+          {prompt.featured === "unknown_version" && (
+            <p className="mt-1 text-xs text-amber-300">
+              Featured plugin, but v{prompt.version} has no validated hash yet; treat it as unvalidated.
+            </p>
+          )}
           <ul className="mt-2 list-inside list-disc text-xs">
             {prompt.capabilities.length === 0 ? (
               <li>No runtime capabilities requested (declarative contributions only).</li>

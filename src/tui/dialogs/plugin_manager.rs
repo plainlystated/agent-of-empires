@@ -421,6 +421,18 @@ fn prompt_summary(prompt: &InstallPrompt) -> Vec<String> {
     if !prompt.description.is_empty() {
         lines.push(prompt.description.clone());
     }
+    match prompt.featured {
+        crate::plugin::featured::FeaturedValidation::Verified => {
+            lines.push("Featured: release matches its maintainer-validated hash.".into());
+        }
+        crate::plugin::featured::FeaturedValidation::UnknownVersion => {
+            lines.push(format!(
+                "Featured, but v{} has no validated hash yet (unvalidated).",
+                prompt.version
+            ));
+        }
+        crate::plugin::featured::FeaturedValidation::NotFeatured => {}
+    }
     lines.push(String::new());
     if let Some(previous) = &prompt.previous_capabilities {
         lines.push(format!(

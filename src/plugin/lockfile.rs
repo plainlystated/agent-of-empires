@@ -20,6 +20,12 @@ pub struct LockRecord {
     pub version: String,
     pub source: PluginSource,
     pub manifest_hash: String,
+    /// Content hash of the installed tree (`integrity::tree_hash`); the
+    /// up-to-date check and the featured index pin against this. Default
+    /// covers lockfiles written before the field existed: never equal to a
+    /// real hash, so the next update recomputes and backfills it.
+    #[serde(default)]
+    pub tree_hash: String,
     pub installed_at: DateTime<Utc>,
 }
 
@@ -99,6 +105,7 @@ mod tests {
                     slug: "owner/repo".into(),
                 },
                 manifest_hash: "sha256:abc".into(),
+                tree_hash: "sha256:def".into(),
                 installed_at: Utc::now(),
             },
         )
@@ -107,6 +114,7 @@ mod tests {
         let reloaded = Lockfile::load_from(path).unwrap();
         let rec = reloaded.get("a.b").unwrap();
         assert_eq!(rec.version, "1.0.0");
+        assert_eq!(rec.tree_hash, "sha256:def");
         assert_eq!(
             rec.source,
             PluginSource::GitHub {

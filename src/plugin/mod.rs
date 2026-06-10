@@ -8,9 +8,11 @@
 //! workers. See `docs/development/internals/plugin-system.md`.
 
 pub mod cli_graft;
+pub mod featured;
 pub mod grants;
 pub mod host;
 pub mod install;
+pub mod integrity;
 pub mod lockfile;
 pub mod registry;
 pub mod runtime;

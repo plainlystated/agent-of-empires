@@ -1,0 +1,18 @@
+# Featured community plugins, curated by AoE maintainers.
+#
+# Each entry pins a GitHub slug to per-release tree hashes (the deterministic
+# sha256 of the plugin directory computed by `src/plugin/integrity.rs`).
+# Installing or updating a featured plugin verifies the fetched tree against
+# the pinned hash for its version: a mismatch refuses the install, an
+# unlisted version proceeds as an ordinary unvalidated community plugin.
+#
+# Builtin plugins (this directory) ship inside the binary and never appear
+# here. To feature a plugin, add:
+#
+# [[featured]]
+# id = "owner.plugin-name"
+# slug = "owner/repo"
+#
+# [[featured.releases]]
+# version = "1.0.0"
+# tree_hash = "sha256:..."

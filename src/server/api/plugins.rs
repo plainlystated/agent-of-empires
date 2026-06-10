@@ -133,6 +133,7 @@ fn prompt_json(prompt: &InstallPrompt) -> serde_json::Value {
         "previous_capabilities": prompt.previous_capabilities,
         "trust": prompt.trust,
         "source": prompt.source.describe(),
+        "featured": prompt.featured,
         "isolation_summary": plugin::sandbox::backend().isolation_summary(),
     })
 }
