@@ -431,7 +431,7 @@ fn agents() -> Result<()> {
 }
 
 fn ps(json: bool) -> Result<()> {
-    use crate::acp::worker_registry;
+    use crate::process::worker_registry;
     let mut records = worker_registry::list().unwrap_or_default();
     records.sort_by_key(|r| r.started_at);
     if json {
@@ -507,8 +507,8 @@ fn render_build_cell(build_version: &str, stale: bool) -> String {
 }
 
 async fn stop(session: Option<String>, all: bool, timeout_secs: u64) -> Result<()> {
-    use crate::acp::worker_registry;
-    let targets: Vec<crate::acp::worker_registry::WorkerRecord> = if all {
+    use crate::process::worker_registry;
+    let targets: Vec<crate::process::worker_registry::WorkerRecord> = if all {
         worker_registry::list().unwrap_or_default()
     } else {
         let id = match session {
@@ -545,7 +545,7 @@ async fn stop(session: Option<String>, all: bool, timeout_secs: u64) -> Result<(
 }
 
 fn kill_now(session: &str) -> Result<()> {
-    use crate::acp::worker_registry;
+    use crate::process::worker_registry;
     let Some(record) = worker_registry::load(session)? else {
         anyhow::bail!("No agent worker registry entry for session {session}");
     };
@@ -564,8 +564,11 @@ fn kill_now(session: &str) -> Result<()> {
     Ok(())
 }
 
-async fn signal_and_wait(record: &crate::acp::worker_registry::WorkerRecord, timeout_secs: u64) {
-    use crate::acp::worker_registry;
+async fn signal_and_wait(
+    record: &crate::process::worker_registry::WorkerRecord,
+    timeout_secs: u64,
+) {
+    use crate::process::worker_registry;
     // Group signals so the whole agent tree (runner + node + SDK child)
     // goes down together, not just the runner pid. Sent unconditionally:
     // the group can outlive its leader pid, so gating on leader liveness
@@ -582,7 +585,7 @@ async fn signal_and_wait(record: &crate::acp::worker_registry::WorkerRecord, tim
 }
 
 fn logs(session: Option<String>, follow: bool) -> Result<()> {
-    use crate::acp::worker_registry;
+    use crate::process::worker_registry;
     let id = match session {
         Some(s) => s,
         None => {
@@ -638,7 +641,7 @@ fn logs(session: Option<String>, follow: bool) -> Result<()> {
 }
 
 fn restart(session: &str) -> Result<()> {
-    use crate::acp::worker_registry;
+    use crate::process::worker_registry;
     let Some(record) = worker_registry::load(session)? else {
         anyhow::bail!("No agent worker registry entry for session {session}");
     };
