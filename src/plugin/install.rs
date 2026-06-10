@@ -160,18 +160,27 @@ pub fn install(
     let dest = super::plugins_dir()?.join(&id);
     copy_plugin_tree(&staged.root, &dest)?;
 
-    let hash = manifest_hash(staged.manifest_raw.as_bytes());
-    GrantStore::load()?.grant(&id, hash.clone(), staged.manifest.capabilities.clone())?;
-    Lockfile::load()?.upsert(
-        &id,
-        LockRecord {
-            version: staged.manifest.version.clone(),
-            source,
-            manifest_hash: hash,
-            installed_at: Utc::now(),
-        },
-    )?;
-    enable_in_config(&id, true)?;
+    // The tree swap and the metadata writes are one unit: if any post-copy
+    // write fails, remove the tree so a half-installed plugin never lingers
+    // behind missing grant/lockfile/config state.
+    let metadata = (|| -> Result<()> {
+        let hash = manifest_hash(staged.manifest_raw.as_bytes());
+        GrantStore::load()?.grant(&id, hash.clone(), staged.manifest.capabilities.clone())?;
+        Lockfile::load()?.upsert(
+            &id,
+            LockRecord {
+                version: staged.manifest.version.clone(),
+                source,
+                manifest_hash: hash,
+                installed_at: Utc::now(),
+            },
+        )?;
+        enable_in_config(&id, true)
+    })();
+    if let Err(e) = metadata {
+        std::fs::remove_dir_all(&dest).ok();
+        return Err(e);
+    }
     super::reload_registry();
     Ok(InstallOutcome::Installed {
         id,
@@ -244,14 +253,35 @@ pub fn update(
     if dest.exists() {
         std::fs::rename(&dest, &backup)?;
     }
-    match copy_plugin_tree(&staged.root, &dest) {
+    // Tree swap + metadata writes are one unit: the backup is restored on
+    // ANY failure up to and including the grant/lockfile writes, so new
+    // plugin bytes can never sit behind an old manifest hash.
+    let swap = (|| -> Result<()> {
+        copy_plugin_tree(&staged.root, &dest)?;
+        grants.grant(
+            plugin_id,
+            new_hash.clone(),
+            staged.manifest.capabilities.clone(),
+        )?;
+        lockfile.upsert(
+            plugin_id,
+            LockRecord {
+                version: staged.manifest.version.clone(),
+                source: record.source.clone(),
+                manifest_hash: new_hash.clone(),
+                installed_at: Utc::now(),
+            },
+        )
+    })();
+    match swap {
         Ok(()) => {
             if backup.exists() {
                 std::fs::remove_dir_all(&backup).ok();
             }
         }
         Err(e) => {
-            // Roll the old tree back so a failed update never leaves a hole.
+            // Roll the old tree back so a failed update never leaves a hole
+            // or a half-updated install.
             std::fs::remove_dir_all(&dest).ok();
             if backup.exists() {
                 std::fs::rename(&backup, &dest).ok();
@@ -259,21 +289,6 @@ pub fn update(
             return Err(e);
         }
     }
-
-    grants.grant(
-        plugin_id,
-        new_hash.clone(),
-        staged.manifest.capabilities.clone(),
-    )?;
-    lockfile.upsert(
-        plugin_id,
-        LockRecord {
-            version: staged.manifest.version.clone(),
-            source: record.source,
-            manifest_hash: new_hash,
-            installed_at: Utc::now(),
-        },
-    )?;
     super::reload_registry();
     Ok(InstallOutcome::Updated {
         id: plugin_id.to_string(),
