@@ -126,26 +126,35 @@ impl EventBus {
     /// Append a fact to the durable log and broadcast it to live
     /// subscribers. Returns the assigned seq.
     pub fn publish(&self, topic: &str, payload: serde_json::Value) -> Result<u64> {
-        let seq = self.next_seq.fetch_add(1, Ordering::SeqCst);
         let published_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        let seq;
         {
+            // Allocate the seq under the connection lock and advance the
+            // counter only after the row is durable: a failed insert must not
+            // move highest_seq() past a row that does not exist, or replay
+            // high-water marks would skip it.
             let conn = self.conn.lock().expect("event bus lock poisoned");
+            seq = self.next_seq.load(Ordering::SeqCst);
             conn.execute(
                 "INSERT INTO bus_events (seq, topic, payload_json, created_at)
                  VALUES (?1, ?2, ?3, ?4)",
                 rusqlite::params![seq as i64, topic, payload.to_string(), published_at as i64],
             )?;
-            // Per-topic retention: drop the oldest rows beyond the cap.
-            conn.execute(
+            // Per-topic retention: drop the oldest rows beyond the cap. A
+            // retention failure keeps extra rows but the insert is already
+            // durable, so the seq still advances.
+            let retention = conn.execute(
                 "DELETE FROM bus_events WHERE topic = ?1 AND seq NOT IN (
                     SELECT seq FROM bus_events WHERE topic = ?1
                     ORDER BY seq DESC LIMIT ?2
                 )",
                 rusqlite::params![topic, self.max_events_per_topic as i64],
-            )?;
+            );
+            self.next_seq.store(seq + 1, Ordering::SeqCst);
+            retention?;
         }
         let event = Arc::new(BusEvent {
             seq,
