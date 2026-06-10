@@ -7,10 +7,12 @@
 //! schema, keybinds, themes, status detection), and supervises Tier 1
 //! workers. See `docs/development/internals/plugin-system.md`.
 
+pub mod cli_graft;
 pub mod grants;
 pub mod install;
 pub mod lockfile;
 pub mod registry;
+pub mod runtime;
 pub mod settings;
 
 use std::path::PathBuf;

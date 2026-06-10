@@ -40,7 +40,23 @@ fn is_serve_daemon_child(_cli: &Cli) -> bool {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    // Core stays a clap derive; active plugins graft their commands into the
+    // derived tree per invocation (D4). Core dispatch always wins; only when
+    // the derive cannot claim the matches does the plugin registry try.
+    let root = Cli::command();
+    let grafted = agent_of_empires::plugin::cli_graft::grafted_commands(&root);
+    let cli = if grafted.is_empty() {
+        Cli::parse()
+    } else {
+        let matches = agent_of_empires::plugin::cli_graft::graft_all(root, &grafted).get_matches();
+        match <Cli as clap::FromArgMatches>::from_arg_matches(&matches) {
+            Ok(cli) => cli,
+            Err(e) => match agent_of_empires::plugin::cli_graft::dispatch(&matches, &grafted) {
+                Some(outcome) => return outcome,
+                None => e.exit(),
+            },
+        }
+    };
 
     // If the user passed --daemon-url, mirror the value into the env
     // var so the acp::client::discovery layer (used by both the

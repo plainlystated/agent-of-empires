@@ -685,6 +685,116 @@ pub static BINDINGS: &[Binding] = &[
     },
 ];
 
+/// A keybind contributed by an active plugin's manifest, resolved at runtime
+/// and chained after the static core table: core chords always win, plugin
+/// conflicts resolve by declared priority (then plugin id for determinism).
+#[derive(Debug, Clone)]
+pub struct PluginBinding {
+    pub plugin_id: String,
+    /// Action name within the plugin (`plugin.<id>.<action>` canonically).
+    pub action: String,
+    pub label: String,
+    /// JSON-RPC method invoked on the plugin worker.
+    pub rpc_method: String,
+    pub chord: Chord,
+    pub priority: i32,
+}
+
+impl PluginBinding {
+    /// Canonical external action id, e.g. `plugin.aoe-status.run_review`.
+    pub fn canonical_id(&self) -> String {
+        format!("plugin.{}.{}", self.plugin_id, self.action)
+    }
+}
+
+/// Parse a manifest chord string: a single char (`R`, uppercase implies
+/// Shift), `ctrl+<char>`, or `f<n>`. Returns `None` for anything else; the
+/// binding is skipped and reported, never silently mis-bound.
+pub fn parse_chord(s: &str) -> Option<Chord> {
+    let s = s.trim();
+    if let Some(rest) = s.strip_prefix("ctrl+").or_else(|| s.strip_prefix("Ctrl+")) {
+        let mut chars = rest.chars();
+        let (Some(c), None) = (chars.next(), chars.next()) else {
+            return None;
+        };
+        return Some(Chord {
+            code: KeyCode::Char(c),
+            ctrl: true,
+        });
+    }
+    if let Some(rest) = s.strip_prefix('f').or_else(|| s.strip_prefix('F')) {
+        if let Ok(n) = rest.parse::<u8>() {
+            return Some(Chord {
+                code: KeyCode::F(n),
+                ctrl: false,
+            });
+        }
+    }
+    let mut chars = s.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        return Some(Chord {
+            code: KeyCode::Char(c),
+            ctrl: false,
+        });
+    }
+    None
+}
+
+/// Build the runtime plugin-binding table from the active plugin set, sorted
+/// by priority (desc) then plugin id. Invalid chords and references to
+/// undeclared actions are skipped (manifest validation already rejects the
+/// latter at load).
+pub fn plugin_bindings() -> Vec<PluginBinding> {
+    let registry = crate::plugin::registry();
+    let mut out = Vec::new();
+    for plugin in registry.active() {
+        for kb in &plugin.manifest.keybinds {
+            let Some(chord) = parse_chord(&kb.chord) else {
+                tracing::warn!(target: "plugin", plugin = plugin.id(), chord = %kb.chord, "unparseable keybind chord; skipped");
+                continue;
+            };
+            let Some(action) = plugin.manifest.actions.iter().find(|a| a.name == kb.action) else {
+                continue;
+            };
+            out.push(PluginBinding {
+                plugin_id: plugin.id().to_string(),
+                action: action.name.clone(),
+                label: action.label.clone(),
+                rpc_method: action.rpc_method.clone(),
+                chord,
+                priority: kb.priority,
+            });
+        }
+    }
+    out.sort_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then_with(|| a.plugin_id.cmp(&b.plugin_id))
+    });
+    out
+}
+
+/// Resolve a key against the plugin table. Call only after core [`resolve`]
+/// returned `None`, so core chords shadow plugin chords by construction.
+pub fn resolve_plugin(key: &KeyEvent, table: &[PluginBinding]) -> Option<PluginBinding> {
+    table.iter().find(|b| chord_matches(&b.chord, key)).cloned()
+}
+
+/// The core action (if any) that shadows `chord` in the given mode, for the
+/// conflict inspector: a plugin binding on this chord never fires there.
+pub fn shadowing_core_action(chord: &Chord, strict: bool) -> Option<ActionId> {
+    for b in BINDINGS {
+        let chords = if strict { b.strict } else { b.non_strict };
+        if chords
+            .iter()
+            .any(|c| c.code == chord.code && c.ctrl == chord.ctrl)
+        {
+            return Some(b.id);
+        }
+    }
+    None
+}
+
 /// Stable palette/test id for an action (matches the legacy `builtin_commands`
 /// ids). Only actions that surface in the palette need one.
 pub fn palette_id(id: ActionId) -> &'static str {

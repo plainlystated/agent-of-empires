@@ -111,10 +111,42 @@ pub fn discover_custom_themes() -> Vec<(String, PathBuf)> {
     themes
 }
 
-/// Return the full list of available theme names: built-in themes first, then custom.
+/// Theme files contributed by active plugins (manifest `[[themes]]` entries,
+/// resolved against the plugin's install root). Builtin theme names and
+/// already-discovered custom names win on collision.
+fn plugin_theme_files(existing: &[(String, PathBuf)]) -> Vec<(String, PathBuf)> {
+    let mut themes = Vec::new();
+    let registry = crate::plugin::registry();
+    for plugin in registry.active() {
+        let Some(root) = &plugin.root else {
+            continue;
+        };
+        for theme in &plugin.manifest.themes {
+            let path = root.join(&theme.file);
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let name = stem.to_string();
+            if path.is_file()
+                && !is_builtin_theme(&name)
+                && !existing.iter().any(|(n, _)| n == &name)
+                && !themes.iter().any(|(n, _): &(String, PathBuf)| n == &name)
+            {
+                themes.push((name, path));
+            }
+        }
+    }
+    themes.sort_by(|a, b| a.0.cmp(&b.0));
+    themes
+}
+
+/// Return the full list of available theme names: built-in themes first,
+/// then custom, then active-plugin contributions.
 pub fn available_themes() -> Vec<String> {
     let mut names: Vec<String> = builtin_theme_names().map(|s| s.to_string()).collect();
-    for (name, _) in discover_custom_themes() {
+    let custom = discover_custom_themes();
+    let plugin = plugin_theme_files(&custom);
+    for (name, _) in custom.into_iter().chain(plugin) {
         names.push(name);
     }
     names
@@ -153,7 +185,9 @@ pub fn load_theme(name: &str) -> Theme {
         debug!(theme = name, source = "builtin", "loaded theme");
         return parse_builtin(builtin);
     }
-    for (theme_name, path) in discover_custom_themes() {
+    let custom = discover_custom_themes();
+    let plugin = plugin_theme_files(&custom);
+    for (theme_name, path) in custom.into_iter().chain(plugin) {
         if theme_name == name {
             if let Some(theme) = load_custom_theme(&path) {
                 debug!(

@@ -2144,6 +2144,26 @@ impl HomeView {
             return self.run_action(id, update_info);
         }
 
+        // Plugin-contributed keybinds, chained after the core table so core
+        // chords always shadow plugin chords.
+        if let Some(binding) = bindings::resolve_plugin(&key, &bindings::plugin_bindings()) {
+            let params = serde_json::json!({ "session_id": self.selected_session.clone() });
+            match crate::plugin::runtime::invoke_action(
+                &binding.plugin_id,
+                &binding.rpc_method,
+                params,
+            ) {
+                Ok(_) => {}
+                Err(e) => {
+                    self.info_dialog = Some(InfoDialog::new(
+                        &format!("Plugin action: {}", binding.label),
+                        &format!("{e:#}"),
+                    ));
+                }
+            }
+            return None;
+        }
+
         // Navigation / structural keys: identical in both modes, never relocate.
         match key.code {
             KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => self.move_cursor(-10),
