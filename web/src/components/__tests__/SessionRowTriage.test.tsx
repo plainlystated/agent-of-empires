@@ -11,6 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useMemo, useRef, type ReactNode } from "react";
 
+// Keep the shared plugin-UI poller out of these tests: its /api/ui/state
+// fetch would pollute the fetch spy that the triage assertions inspect.
+vi.mock("../../hooks/usePluginUi", () => ({
+  usePluginUi: () => null,
+}));
+
 import { DragSuppressContext, SessionRow } from "../WorkspaceSidebar";
 import { useSidebarTriage } from "../../hooks/useSidebarTriage";
 import type { SessionResponse, Workspace } from "../../lib/types";

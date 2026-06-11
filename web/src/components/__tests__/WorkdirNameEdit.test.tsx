@@ -16,6 +16,11 @@ vi.mock("../../lib/toastBus", () => ({
   reportError: vi.fn(),
   reportInfo: vi.fn(),
 }));
+// Keep the shared plugin-UI poller out of these tests: its /api/ui/state
+// fetch would pollute the fetch spy that the payload assertions inspect.
+vi.mock("../../hooks/usePluginUi", () => ({
+  usePluginUi: () => null,
+}));
 import { EMPTY_OPTIMISTIC } from "../../lib/sidebarOptimistic";
 import type { SessionResponse, Workspace } from "../../lib/types";
 

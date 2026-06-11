@@ -14,7 +14,9 @@ let lastRevision = -1;
 
 async function poll() {
   const next = await fetchPluginUiState();
-  if (next && next.revision !== lastRevision) {
+  // Shape-check the network payload before caching: a proxy or stub that
+  // answers /api/ui/state with something else must not crash every consumer.
+  if (next && Array.isArray(next.entries) && Array.isArray(next.notifications) && next.revision !== lastRevision) {
     lastRevision = next.revision;
     state = next;
     listeners.forEach((l) => l());

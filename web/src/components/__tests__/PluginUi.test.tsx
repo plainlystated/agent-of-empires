@@ -92,6 +92,18 @@ describe("PluginUi contract", () => {
     expect(popover.textContent).toContain("frontend-agent has no output for 12m.");
   });
 
+  it("ignores malformed /api/ui/state payloads instead of crashing consumers", async () => {
+    // Regression: a catch-all fetch stub answering every URL with a generic
+    // object made the store cache a payload without entries/notifications,
+    // crashing every SessionRow on entries.filter.
+    fetchPluginUiState.mockResolvedValue({ id: "s1" } as unknown as PluginUiState);
+    const { container } = render(<PluginSessionRowItems sessionId="s1" />);
+    await waitFor(() => {
+      expect(fetchPluginUiState).toHaveBeenCalled();
+    });
+    expect(container.textContent).toBe("");
+  });
+
   it("renders per-session badges and column cells for the right session only", async () => {
     const { findByText } = render(<PluginSessionRowItems sessionId="s1" />);
     await findByText("blocked");
