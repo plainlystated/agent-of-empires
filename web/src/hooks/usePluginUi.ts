@@ -13,7 +13,14 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let lastRevision = -1;
 
 async function poll() {
-  const next = await fetchPluginUiState();
+  // A transient backend hiccup must not become an unhandled rejection from
+  // the interval callback; keep the last good state and try again next tick.
+  let next: PluginUiState | null;
+  try {
+    next = await fetchPluginUiState();
+  } catch {
+    return;
+  }
   // Shape-check the network payload before caching: a proxy or stub that
   // answers /api/ui/state with something else must not crash every consumer.
   if (next && Array.isArray(next.entries) && Array.isArray(next.notifications) && next.revision !== lastRevision) {
