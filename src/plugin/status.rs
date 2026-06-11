@@ -185,10 +185,16 @@ pub fn detect(session: Option<&str>, tool: &str, clean: &str) -> Option<Status> 
         return agent.evaluate(&clean_lower);
     }
     if let Some(rpc) = snap.rpc.get(tool) {
+        // The plugin OWNS this tool: never fall through to the builtin
+        // detector while it is active, or detection flaps between plugin
+        // and builtin answers on cold caches and worker hiccups. Idle is
+        // the deterministic plugin-owned placeholder until the first batch
+        // answers; session-less callers (one-shot content checks) get the
+        // same placeholder because there is no cache identity to consult.
         if let Some(session) = session {
-            return detect_rpc(rpc, session, tool, clean);
+            return Some(detect_rpc(rpc, session, tool, clean).unwrap_or(Status::Idle));
         }
-        return None;
+        return Some(Status::Idle);
     }
     // Wildcard: only tools with no builtin agent entry, so plugin rules can
     // serve custom agents without shadowing first-party detectors. Gated by
