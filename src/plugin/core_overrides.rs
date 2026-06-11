@@ -117,10 +117,12 @@ static CORE_FIELDS: LazyLock<std::collections::HashSet<(String, String)>> = Lazy
 });
 
 /// Apply active plugins' core default overrides to a raw config table, in
-/// place, before it deserializes into `Config`.
+/// place, before it deserializes into `Config`, and remember exactly what
+/// was written for the strip pass on save.
 pub fn apply_to_table(table: &mut toml::Table) {
     let scan = scanned();
-    apply_with(table, &scan);
+    let applied = apply_with(table, &scan);
+    *APPLIED.write().expect("applied overrides lock") = Some(applied);
 }
 
 fn enabled_in(table: &toml::Table, plugin: &ScannedPlugin) -> bool {
@@ -170,7 +172,21 @@ fn winners<'a>(
     winners
 }
 
-fn apply_with(table: &mut toml::Table, scan: &[ScannedPlugin]) {
+/// Exactly what the last [`apply_to_table`] pass in this process wrote:
+/// `(section, field) -> applied value`. This is the provenance the strip
+/// pass consults, so only host-applied defaults are ever reverted on save;
+/// a user choice that merely EQUALS some plugin's override value survives
+/// unless that exact override is the one currently applied. Every config
+/// load runs apply first, so the map is always current when a save happens.
+static APPLIED: RwLock<Option<std::collections::HashMap<(String, String), toml::Value>>> =
+    RwLock::new(None);
+
+fn apply_with(
+    table: &mut toml::Table,
+    scan: &[ScannedPlugin],
+) -> std::collections::HashMap<(String, String), toml::Value> {
+    let mut applied: std::collections::HashMap<(String, String), toml::Value> =
+        std::collections::HashMap::new();
     for ((section, field), (_, plugin_id, value)) in winners(table, scan) {
         let builtin_default = BUILTIN_DEFAULTS.get(section).and_then(|s| s.get(field));
         // Refuse type drift: a string pushed into a bool field would fail
@@ -200,38 +216,43 @@ fn apply_with(table: &mut toml::Table, scan: &[ScannedPlugin]) {
             .or_insert_with(|| toml::Value::Table(toml::Table::new()));
         if let Some(toml::Value::Table(section_table)) = table.get_mut(section) {
             section_table.insert(field.to_string(), value.clone());
+            applied.insert((section.to_string(), field.to_string()), value.clone());
         }
     }
+    applied
 }
 
 /// The inverse of [`apply_to_table`], run by `save_config` before writing:
-/// any core field whose value equals a KNOWN plugin override (from any
-/// scanned plugin, enabled or not) resets to the built-in default, so an
-/// applied override never persists as a user choice. If the plugin is still
-/// active the override re-applies on the next load; if it was just disabled
-/// the field genuinely falls back to the built-in default, which is the
-/// point.
+/// every field the LAST apply pass actually wrote (and that still holds the
+/// applied value) resets to the built-in default, so a host-applied
+/// override never persists as a user choice. Provenance-based on purpose: a
+/// user value that merely equals some plugin's declared override (e.g. of a
+/// disabled plugin) is untouched, because apply never wrote it. If the
+/// owning plugin is still active the override re-applies on the next load;
+/// if it was just disabled the field genuinely falls back to the built-in
+/// default, which is the point.
 pub fn strip_from_table(table: &mut toml::Table) {
-    let scan = scanned();
-    strip_with(table, &scan);
+    let applied = APPLIED.read().expect("applied overrides lock");
+    if let Some(applied) = applied.as_ref() {
+        strip_with(table, applied);
+    }
 }
 
-fn strip_with(table: &mut toml::Table, scan: &[ScannedPlugin]) {
-    for plugin in scan {
-        for ov in &plugin.overrides {
-            let Some((section, field)) = ov.target.rsplit_once('.') else {
-                continue;
-            };
-            let current = table.get(section).and_then(|s| s.get(field));
-            if current != Some(&ov.value) {
-                continue;
-            }
-            let Some(default) = BUILTIN_DEFAULTS.get(section).and_then(|s| s.get(field)) else {
-                continue;
-            };
-            if let Some(toml::Value::Table(section_table)) = table.get_mut(section) {
-                section_table.insert(field.to_string(), default.clone());
-            }
+fn strip_with(
+    table: &mut toml::Table,
+    applied: &std::collections::HashMap<(String, String), toml::Value>,
+) {
+    for ((section, field), applied_value) in applied {
+        let current = table.get(section).and_then(|s| s.get(field));
+        // The user changed the field after load: their new value wins.
+        if current != Some(applied_value) {
+            continue;
+        }
+        let Some(default) = BUILTIN_DEFAULTS.get(section).and_then(|s| s.get(field)) else {
+            continue;
+        };
+        if let Some(toml::Value::Table(section_table)) = table.get_mut(section) {
+            section_table.insert(field.to_string(), default.clone());
         }
     }
 }
@@ -409,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn strip_resets_override_values_but_keeps_real_choices() {
+    fn strip_reverts_only_what_apply_actually_wrote() {
         let scan = vec![plugin(
             "acme.a",
             true,
@@ -418,26 +439,44 @@ mod tests {
             10,
         )];
 
-        // Baked-in override value resets to the built-in default on save,
-        // even when the plugin is disabled in the table being saved.
-        let mut baked: toml::Table = toml::from_str("[session]\nyolo_mode_default = true").unwrap();
-        strip_with(&mut baked, &scan);
+        // Apply bakes the override and records provenance; stripping the
+        // same (materialized) table reverts it to the built-in default,
+        // even when the plugin was meanwhile disabled in the saved table.
+        let mut table = toml::Table::new();
+        enable(&mut table, "acme.a");
+        let applied = apply_with(&mut table, &scan);
         assert_eq!(
-            baked["session"]["yolo_mode_default"],
+            table["session"]["yolo_mode_default"],
+            toml::Value::Boolean(true)
+        );
+        strip_with(&mut table, &applied);
+        assert_eq!(
+            table["session"]["yolo_mode_default"],
             toml::Value::Boolean(false)
         );
 
-        // A value no override produces is a real user choice; untouched.
-        let other = vec![plugin(
-            "acme.a",
-            true,
-            TARGET,
-            toml::Value::Boolean(false),
-            10,
-        )];
+        // The user changed the field after load: kept even though an
+        // override for it was applied this pass.
+        let mut changed = toml::Table::new();
+        enable(&mut changed, "acme.a");
+        let applied = apply_with(&mut changed, &scan);
+        if let Some(toml::Value::Table(session)) = changed.get_mut("session") {
+            session.insert("yolo_mode_default".into(), toml::Value::Boolean(false));
+        }
+        strip_with(&mut changed, &applied);
+        assert_eq!(
+            changed["session"]["yolo_mode_default"],
+            toml::Value::Boolean(false)
+        );
+
+        // A user value that merely EQUALS a declared override which was
+        // never applied (plugin disabled): untouched. This is the data-loss
+        // case provenance-based stripping exists to prevent.
         let mut chosen: toml::Table =
             toml::from_str("[session]\nyolo_mode_default = true").unwrap();
-        strip_with(&mut chosen, &other);
+        let applied = apply_with(&mut chosen, &scan); // not enabled: applies nothing
+        assert!(applied.is_empty());
+        strip_with(&mut chosen, &applied);
         assert_eq!(
             chosen["session"]["yolo_mode_default"],
             toml::Value::Boolean(true)
