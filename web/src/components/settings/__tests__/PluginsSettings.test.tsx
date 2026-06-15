@@ -166,11 +166,20 @@ describe("PluginsSettings contract", () => {
     expect(installPlugin).toHaveBeenCalledTimes(1);
   });
 
-  it("update button asks unconfirmed first; uninstall requires window.confirm", async () => {
-    updatePlugin.mockResolvedValue({ kind: "ok", message: "up to date" });
+  it("update button is greyed until a check finds an available update; uninstall requires window.confirm", async () => {
+    fetchPluginUpdates.mockResolvedValue({ updates: { "example.plugin": { status: "available" } } });
+    updatePlugin.mockResolvedValue({ kind: "ok", message: "updated" });
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     const { findByText } = render(<PluginsSettings />);
 
+    // Before a check, availability is unknown, so the button is disabled.
+    const updateBtn = (await findByText("Update")) as HTMLButtonElement;
+    expect(updateBtn.disabled).toBe(true);
+
+    // Once a check reports an available update, it enables and fires.
+    fireEvent.click(await findByText("Check for updates"));
+    await findByText("update available");
+    expect(((await findByText("Update")) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(await findByText("Update"));
     await waitFor(() => {
       expect(updatePlugin).toHaveBeenCalledWith("example.plugin", false, undefined);
@@ -180,6 +189,59 @@ describe("PluginsSettings contract", () => {
     expect(confirmSpy).toHaveBeenCalled();
     expect(uninstallPlugin).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
+  });
+
+  it("notifies the parent after a mutation so plugin settings sections can refresh", async () => {
+    const onPluginsChanged = vi.fn();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { findByText } = render(<PluginsSettings onPluginsChanged={onPluginsChanged} />);
+
+    fireEvent.click(await findByText("Uninstall"));
+    await waitFor(() => {
+      expect(uninstallPlugin).toHaveBeenCalledWith("example.plugin");
+      expect(onPluginsChanged).toHaveBeenCalled();
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it("a discovered plugin reads as installed (no Install button) once it joins the live list", async () => {
+    discoverPlugins.mockResolvedValue({
+      plugins: [{ slug: "acme/aoe-review", description: "Curated", stars: 5, featured: true, installed: false }],
+    });
+    installPlugin.mockResolvedValue({ kind: "ok", message: "Installed acme.review 1.0.0" });
+    const installedEntry = {
+      id: "acme.review",
+      name: "Review",
+      version: "1.0.0",
+      description: "",
+      source: "github:acme/aoe-review",
+      trust: "community" as const,
+      enabled: true,
+      grant: "granted" as const,
+      active: true,
+      capabilities: [],
+      has_runtime: false,
+      setting_count: 0,
+      builtin: false,
+    };
+    // Mount sees the base list; the post-install reload includes the new slug.
+    fetchPlugins.mockResolvedValueOnce(listResponse());
+    fetchPlugins.mockResolvedValue(listResponse({ plugins: [...listResponse().plugins, installedEntry] }));
+
+    const { findByText, findByTestId, getByTestId } = render(<PluginsSettings />);
+    fireEvent.click(await findByText("Search GitHub"));
+
+    const row = await findByTestId("discovered-acme/aoe-review");
+    const installButton = row.querySelector("button");
+    expect(installButton).not.toBeNull();
+    fireEvent.click(installButton!);
+
+    await findByText("Installed acme.review 1.0.0");
+    await waitFor(() => {
+      const updated = getByTestId("discovered-acme/aoe-review");
+      expect(updated.textContent).toContain("Installed");
+      expect(updated.querySelector("button")).toBeNull();
+    });
   });
 
   it("check for updates renders the available badge from the updates map", async () => {

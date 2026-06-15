@@ -20,7 +20,11 @@ import {
 /// Installs are two-phase: the server answers 409 with the declared
 /// capability set, the user approves it here, and only the confirmed retry
 /// writes anything (#268).
-export function PluginsSettings() {
+/// `onPluginsChanged` fires after any install/uninstall/enable/disable so the
+/// parent can refetch the settings schema: the set of `plugin:<id>` settings
+/// sections (and their resolved defaults) changes with the plugin set, and
+/// otherwise a stale section lingers until a full page reload.
+export function PluginsSettings({ onPluginsChanged }: { onPluginsChanged?: () => void } = {}) {
   const [data, setData] = useState<PluginListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -65,6 +69,7 @@ export function PluginsSettings() {
       const ok = await setPluginEnabled(plugin.id, enabled);
       if (!ok) setError(`Failed to ${enabled ? "enable" : "disable"} ${plugin.id}.`);
       await reload();
+      onPluginsChanged?.();
     } finally {
       setBusy(false);
     }
@@ -95,6 +100,7 @@ export function PluginsSettings() {
         setPendingAction(null);
         if (action.kind === "install") setInstallSource("");
         await reload();
+        onPluginsChanged?.();
       } else {
         setError(result.message);
         setPrompt(null);
@@ -156,6 +162,7 @@ export function PluginsSettings() {
         setError(`Failed to uninstall ${plugin.id}.`);
       }
       await reload();
+      onPluginsChanged?.();
     } finally {
       setBusy(false);
     }
@@ -164,6 +171,17 @@ export function PluginsSettings() {
   if (!data && !error) {
     return <p className="text-sm text-text-dim">Loading plugins…</p>;
   }
+
+  // Live install state for discovered rows: the discover payload's `installed`
+  // flag is a snapshot from search time, so a plugin installed since (this
+  // session, without re-searching) must still read as installed. Sources are
+  // `github:<slug>` (see PluginSource::describe).
+  const installedGithubSlugs = new Set(
+    (data?.plugins ?? [])
+      .map((p) => p.source)
+      .filter((s) => s.startsWith("github:"))
+      .map((s) => s.slice("github:".length)),
+  );
 
   return (
     <div className="space-y-4">
@@ -227,8 +245,13 @@ export function PluginsSettings() {
                   <>
                     <button
                       type="button"
-                      className="rounded border border-surface-700 px-2 py-1 text-xs hover:bg-surface-800"
-                      disabled={busy}
+                      className="rounded border border-surface-700 px-2 py-1 text-xs hover:bg-surface-800 disabled:cursor-not-allowed disabled:opacity-40"
+                      disabled={busy || updateStatuses?.[plugin.id]?.status !== "available"}
+                      title={
+                        updateStatuses?.[plugin.id]?.status === "available"
+                          ? undefined
+                          : "No update available. Run Check for updates first."
+                      }
                       onClick={() => void runMutation({ kind: "update", id: plugin.id }, false)}
                     >
                       Update
@@ -318,42 +341,47 @@ export function PluginsSettings() {
         )}
         {discovered && discovered.length > 0 && (
           <ul className="mt-3 space-y-2">
-            {discovered.map((found) => (
-              <li
-                key={found.slug}
-                className="flex items-start justify-between gap-3 rounded border border-surface-700 p-2"
-                data-testid={`discovered-${found.slug}`}
-              >
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-sm">{found.slug}</span>
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
-                        found.installed
-                          ? "bg-surface-700 text-text-dim"
-                          : found.featured
-                            ? "bg-emerald-900/60 text-emerald-300"
-                            : "bg-amber-900/60 text-amber-300"
-                      }`}
-                    >
-                      {found.installed ? "installed" : found.featured ? "featured" : "unvetted"}
-                    </span>
-                    <span className="text-[11px] text-text-dim">{found.stars} stars</span>
+            {discovered.map((found) => {
+              const installed = found.installed || installedGithubSlugs.has(found.slug);
+              return (
+                <li
+                  key={found.slug}
+                  className="flex items-start justify-between gap-3 rounded border border-surface-700 p-2"
+                  data-testid={`discovered-${found.slug}`}
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-sm">{found.slug}</span>
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
+                          installed
+                            ? "bg-surface-700 text-text-dim"
+                            : found.featured
+                              ? "bg-emerald-900/60 text-emerald-300"
+                              : "bg-amber-900/60 text-amber-300"
+                        }`}
+                      >
+                        {installed ? "installed" : found.featured ? "featured" : "unvetted"}
+                      </span>
+                      <span className="text-[11px] text-text-dim">{found.stars} stars</span>
+                    </div>
+                    {found.description && <p className="mt-1 text-xs text-text-dim">{found.description}</p>}
                   </div>
-                  {found.description && <p className="mt-1 text-xs text-text-dim">{found.description}</p>}
-                </div>
-                {!found.installed && (
-                  <button
-                    type="button"
-                    className="shrink-0 rounded border border-surface-700 px-2 py-1 text-xs hover:bg-surface-800"
-                    disabled={busy}
-                    onClick={() => void runMutation({ kind: "install", source: found.slug }, false)}
-                  >
-                    Install
-                  </button>
-                )}
-              </li>
-            ))}
+                  {installed ? (
+                    <span className="shrink-0 self-center text-xs text-text-dim">Installed</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="shrink-0 rounded border border-surface-700 px-2 py-1 text-xs hover:bg-surface-800"
+                      disabled={busy}
+                      onClick={() => void runMutation({ kind: "install", source: found.slug }, false)}
+                    >
+                      Install
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

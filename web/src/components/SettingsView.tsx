@@ -513,7 +513,15 @@ export function SettingsView({ onClose, tab, onSelectTab, onServerAboutRefresh, 
         ];
         return (
           <div className="space-y-6">
-            <PluginsSettings />
+            <PluginsSettings
+              onPluginsChanged={() => {
+                // The installed plugin set drives the plugin:<id> settings
+                // sections and their resolved defaults; refetch both so an
+                // uninstalled plugin's section vanishes without a page reload.
+                void loadSchema();
+                loadSettings();
+              }}
+            />
             {pluginSections.length > 0 && (
               <div className="space-y-4">
                 <h4 className="text-xs font-mono uppercase tracking-widest text-text-muted">Plugin Settings</h4>
