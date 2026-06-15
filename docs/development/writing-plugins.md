@@ -433,8 +433,22 @@ search) lists repositories with that topic, featured first, and users
 install with `aoe plugin install owner/repo`.
 
 To get a release featured (vouched for by the AoE maintainers and
-hash-verified on install), open a PR against this repository adding your
-plugin to `plugins/featured.toml`:
+hash-verified on install), it has to be pinned in `plugins/featured.toml`.
+A maintainer does that with the xtask helper, which clones the default
+branch exactly as `aoe plugin install` does, computes the tree hash install
+will see, and gates the write on an explicit safety attestation:
+
+```sh
+cargo xtask feature-plugin owner/repo
+```
+
+It prints the resolved id, version, capabilities, and hash, then asks the
+maintainer to attest they reviewed the source and tested that version
+before writing the entry (pass `--yes` to skip the prompt in automation).
+A new version of an already-featured plugin adds another
+`[[featured.releases]]` line; the helper refuses to re-pin an
+already-released version to a different hash (bump the version instead) and
+refuses a slug that now serves a different plugin id. The resulting entry:
 
 ```toml
 [[featured]]
@@ -446,10 +460,12 @@ version = "1.0.0"
 tree_hash = "sha256:..."
 ```
 
-The `tree_hash` is the output of `aoe plugin hash ./your-plugin` at that
-release. Installing or updating a featured plugin verifies the fetched
-tree against the pin: a mismatch refuses the install, an unlisted newer
-version installs as ordinary unvalidated community code.
+Installing or updating a featured plugin verifies the fetched tree against
+the pin: a mismatch refuses the install, an unlisted newer version installs
+as ordinary unvalidated community code. The index is compiled into the
+binary, so a featuring only takes effect in an aoe build that includes the
+edit. (`aoe plugin hash ./dir` prints the same hash for a local directory if
+you want to inspect it by hand.)
 
 Updates and capabilities interact conservatively. `aoe plugin outdated`
 compares the recorded clone commit (GitHub) or re-hashes the source

@@ -7,15 +7,7 @@
 # unlisted version proceeds as an ordinary unvalidated community plugin.
 #
 # Builtin plugins (this directory) ship inside the binary and never appear
-# here. To feature a plugin, add:
-#
-# [[featured]]
-# id = "owner.plugin-name"
-# slug = "owner/repo"
-#
-# [[featured.releases]]
-# version = "1.0.0"
-# tree_hash = "sha256:..."
+# here. Add or update entries with `cargo xtask feature-plugin <owner/repo>`.
 
 [[featured]]
 id = "agent-of-empires.github"

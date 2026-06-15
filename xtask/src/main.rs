@@ -21,6 +21,20 @@ enum Commands {
     CheckSkill,
     /// Run the web dashboard backend and Vite dev server together (Ctrl-C stops both)
     Dev(DevArgs),
+    /// Vet a community plugin and add it to the curated featured index
+    /// (clones the repo, computes its tree hash, confirms with you, then
+    /// writes `plugins/featured.toml`).
+    FeaturePlugin(FeaturePluginArgs),
+}
+
+#[derive(Args)]
+struct FeaturePluginArgs {
+    /// GitHub `owner/repo` of the plugin to feature.
+    slug: String,
+    /// Skip the interactive safety attestation. For non-interactive use only;
+    /// you are still attesting you reviewed and tested the source.
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Args)]
@@ -48,6 +62,7 @@ fn main() {
         Commands::GenDocs => generate_cli_docs(),
         Commands::CheckSkill => check_skill(),
         Commands::Dev(dev) => run_dev(dev),
+        Commands::FeaturePlugin(args) => feature_plugin(args),
     }
 }
 
@@ -559,6 +574,167 @@ fn check_skill_file(
 
     referenced.extend(skill_commands);
     has_error
+}
+
+/// Curated-index header re-emitted on every write (the toml crate does not
+/// round-trip comments, so the prose lives here, not in the file).
+const FEATURED_HEADER: &str = "\
+# Featured community plugins, curated by AoE maintainers.
+#
+# Each entry pins a GitHub slug to per-release tree hashes (the deterministic
+# sha256 of the plugin directory computed by `src/plugin/integrity.rs`).
+# Installing or updating a featured plugin verifies the fetched tree against
+# the pinned hash for its version: a mismatch refuses the install, an
+# unlisted version proceeds as an ordinary unvalidated community plugin.
+#
+# Builtin plugins (this directory) ship inside the binary and never appear
+# here. Add or update entries with `cargo xtask feature-plugin <owner/repo>`.
+";
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct FeaturedIndexFile {
+    #[serde(default)]
+    featured: Vec<FeaturedEntry>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FeaturedEntry {
+    id: String,
+    slug: String,
+    #[serde(default)]
+    releases: Vec<FeaturedReleaseEntry>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FeaturedReleaseEntry {
+    version: String,
+    tree_hash: String,
+}
+
+fn fail(msg: impl std::fmt::Display) -> ! {
+    eprintln!("error: {msg}");
+    std::process::exit(1);
+}
+
+/// Vet a community plugin and pin it in `plugins/featured.toml`. Clones the
+/// default branch exactly as `aoe plugin install` does so the hash we pin is
+/// the one install computes, then gates the write on an explicit safety
+/// attestation.
+fn feature_plugin(args: FeaturePluginArgs) {
+    let slug = args.slug.trim().trim_end_matches('/').to_string();
+    if slug.split('/').filter(|s| !s.is_empty()).count() != 2 {
+        fail(format!(
+            "expected a GitHub slug like `owner/repo`, got {slug:?}"
+        ));
+    }
+    let index_path = Path::new("plugins/featured.toml");
+    if !index_path.exists() {
+        fail(format!(
+            "{} not found; run from the repository root",
+            index_path.display()
+        ));
+    }
+
+    let tmp = tempfile::tempdir().expect("creating temp dir");
+    let dest = tmp.path().join("plugin");
+    let url = format!("https://github.com/{slug}.git");
+    println!("Cloning {url} ...");
+    let cloned = std::process::Command::new("git")
+        .args(["clone", "--depth", "1", &url])
+        .arg(&dest)
+        .status()
+        .expect("running git clone");
+    if !cloned.success() {
+        fail(format!("git clone of {url} failed"));
+    }
+
+    let manifest_raw = fs::read_to_string(dest.join("aoe-plugin.toml"))
+        .unwrap_or_else(|e| fail(format!("no aoe-plugin.toml in {slug}: {e}")));
+    let manifest = aoe_plugin_api::PluginManifest::from_toml_str(&manifest_raw)
+        .unwrap_or_else(|e| fail(format!("invalid plugin manifest: {e}")));
+    let id = manifest.id.as_str().to_string();
+    let version = manifest.version.clone();
+    let tree_hash = agent_of_empires::plugin::integrity::tree_hash(&dest)
+        .unwrap_or_else(|e| fail(format!("hashing plugin tree: {e:#}")));
+    let caps = if manifest.capabilities.is_empty() {
+        "none".to_string()
+    } else {
+        manifest
+            .capabilities
+            .iter()
+            .map(|c| c.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    println!();
+    println!("  plugin id    : {id}");
+    println!("  slug         : {slug}");
+    println!("  version      : {version}");
+    println!("  capabilities : {caps}");
+    println!("  tree hash    : {tree_hash}");
+    println!();
+
+    if !args.yes {
+        println!("Featuring vouches for this exact version to every AoE user: it ships");
+        println!("'Verified' and a tampered tree is refused.");
+        print!(
+            "Do you attest you reviewed the source AND tested v{version} of {slug}, \
+             and confirm it is safe for users? Type 'yes' to feature it: "
+        );
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        std::io::stdin()
+            .read_line(&mut line)
+            .expect("reading confirmation");
+        if line.trim() != "yes" {
+            println!("Aborted; nothing written.");
+            return;
+        }
+    }
+
+    let existing = fs::read_to_string(index_path).expect("reading featured.toml");
+    let mut index: FeaturedIndexFile = toml::from_str(&existing)
+        .unwrap_or_else(|e| fail(format!("{} is not valid TOML: {e}", index_path.display())));
+
+    if let Some(entry) = index.featured.iter_mut().find(|e| e.slug == slug) {
+        if entry.id != id {
+            fail(format!(
+                "{slug} is already featured under id {:?} but now serves {id:?}; refusing",
+                entry.id
+            ));
+        }
+        if let Some(rel) = entry.releases.iter().find(|r| r.version == version) {
+            if rel.tree_hash == tree_hash {
+                println!("{id} v{version} is already featured with this hash; nothing to do.");
+                return;
+            }
+            fail(format!(
+                "{id} v{version} is already pinned to a different hash ({}); bump the \
+                 plugin version instead of re-pinning a released one",
+                rel.tree_hash
+            ));
+        }
+        entry.releases.push(FeaturedReleaseEntry {
+            version: version.clone(),
+            tree_hash,
+        });
+    } else {
+        index.featured.push(FeaturedEntry {
+            id: id.clone(),
+            slug: slug.clone(),
+            releases: vec![FeaturedReleaseEntry {
+                version: version.clone(),
+                tree_hash,
+            }],
+        });
+    }
+
+    let body = toml::to_string(&index).expect("serializing featured index");
+    fs::write(index_path, format!("{FEATURED_HEADER}\n{body}")).expect("writing featured.toml");
+    println!("Featured {id} v{version} in {}.", index_path.display());
+    println!("Rebuild aoe (`cargo build`) for the change to take effect.");
 }
 
 #[cfg(all(test, unix))]

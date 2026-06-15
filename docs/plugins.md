@@ -105,10 +105,18 @@ the fetched files against that pin:
 
 Updates compare the same tree hash, so `aoe plugin update` catches releases
 that change code without touching the manifest. To compute the hash for a
-release (for example to submit a plugin for featuring):
+release (for example to inspect what install will verify):
 
 ```sh
 aoe plugin hash ./my-plugin
+```
+
+Maintainers add a plugin to the curated index with the xtask helper, which
+clones the repo, computes the hash, and gates the write on a safety
+attestation (see the "Shipping a plugin" section of the developer guide):
+
+```sh
+cargo xtask feature-plugin owner/repo
 ```
 
 ## Plugin settings
