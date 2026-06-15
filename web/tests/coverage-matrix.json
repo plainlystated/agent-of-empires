@@ -2332,6 +2332,13 @@
       "risk": "medium",
       "specs": ["src/components/settings/__tests__/PluginsSettings.test.tsx"],
       "components": ["web/src/components/settings/PluginsSettings.tsx"]
+    },
+    {
+      "id": "settings.plugins-live-toggle",
+      "kind": "playwright-live",
+      "risk": "high",
+      "specs": ["tests/live/plugins-enable-toggle.spec.ts"],
+      "components": ["web/src/components/settings/PluginsSettings.tsx"]
     }
   ]
 }

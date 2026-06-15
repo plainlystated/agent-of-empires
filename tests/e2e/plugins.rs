@@ -5,7 +5,7 @@
 
 use serial_test::serial;
 
-use crate::harness::TuiTestHarness;
+use crate::harness::{require_tmux, TuiTestHarness};
 
 #[test]
 #[serial]
@@ -339,6 +339,68 @@ entrypoint = "worker.sh"
     );
 
     h.run_cli(&["plugin", "uninstall", "acme.cmd"]);
+}
+
+/// `aoe.web` is a default plugin; disabling it must turn off the serve
+/// surface at runtime. The gate bails in the foreground invocation before any
+/// daemon spawn, and re-enabling restores it.
+#[test]
+#[serial]
+fn test_serve_refuses_when_web_plugin_disabled() {
+    let h = TuiTestHarness::new("plugin_serve_gate");
+    let free_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+        .to_string();
+
+    let disable = h.run_cli(&["plugin", "disable", "aoe.web"]);
+    assert!(disable.status.success(), "disable aoe.web failed");
+
+    let refused = h.run_cli(&["serve", "--daemon", "--port", &free_port, "--no-auth"]);
+    assert!(
+        !refused.status.success(),
+        "serve must refuse while aoe.web is disabled"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("web dashboard plugin is disabled"),
+        "refusal must name the fix:\n{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let enable = h.run_cli(&["plugin", "enable", "aoe.web"]);
+    assert!(enable.status.success(), "enable aoe.web failed");
+
+    let started = h.run_cli(&["serve", "--daemon", "--port", &free_port, "--no-auth"]);
+    assert!(
+        started.status.success(),
+        "serve must start once aoe.web is enabled:\n{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    h.run_cli(&["serve", "--stop"]);
+}
+
+/// The command palette opens the plugin manager, which lists the bundled
+/// plugins with their trust and state. Palette-only (no default chord).
+#[test]
+#[serial]
+fn test_palette_opens_plugin_manager_listing_builtins() {
+    require_tmux!();
+
+    let mut h = TuiTestHarness::new("plugin_manager_palette");
+    h.spawn_tui();
+
+    h.wait_for(" aoe ");
+    h.send_keys("C-k");
+    h.wait_for("Commands");
+    h.type_text("plugins");
+    h.wait_for("Manage plugins");
+    h.send_keys("Enter");
+
+    // The browse dialog lists builtins by their manifest name + trust.
+    h.wait_for("Agent Status Detection");
+    h.assert_screen_contains("builtin");
 }
 
 #[test]
