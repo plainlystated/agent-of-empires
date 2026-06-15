@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useEffect, useMemo, useState } from "react";
-import { fetchSessions, cloneRepo } from "../../../lib/api";
-import type { SessionResponse } from "../../../lib/types";
+import { fetchSessions, fetchProjects, cloneRepo } from "../../../lib/api";
+import type { ProjectInfo, SessionResponse } from "../../../lib/types";
 import { DirectoryBrowser } from "../../DirectoryBrowser";
 import { ExtraReposPicker } from "./ExtraReposPicker";
 
@@ -104,6 +104,21 @@ export function collectRecentProjects(sessions: SessionResponse[]): RecentProjec
   return Array.from(map.values()).sort((a, b) => (b.lastAccessedAt ?? "").localeCompare(a.lastAccessedAt ?? ""));
 }
 
+/** Saved projects are a curated registry; recents are derived from live
+ *  sessions. A path can be in both. Drop it from recents so it renders
+ *  once, in the Saved section. Path keys are normalized the same way
+ *  `collectRecentProjects` normalizes (trailing slashes trimmed, root
+ *  kept as "/") so `/foo/bar` and `/foo/bar/` match across the two
+ *  sources. */
+export function splitSavedAndRecent(
+  saved: ProjectInfo[],
+  recent: RecentProject[],
+): { saved: ProjectInfo[]; recent: RecentProject[] } {
+  const norm = (p: string) => p.replace(/\/+$/, "") || "/";
+  const savedPaths = new Set(saved.map((s) => norm(s.path)));
+  return { saved, recent: recent.filter((r) => !savedPaths.has(norm(r.path))) };
+}
+
 function timeAgo(ts: string | null): string {
   if (!ts) return "";
   const diff = Date.now() - new Date(ts).getTime();
@@ -118,6 +133,7 @@ function timeAgo(ts: string | null): string {
 
 export function ProjectStep({ data, onChange, initialTab }: Props) {
   const [recent, setRecent] = useState<RecentProject[]>([]);
+  const [saved, setSaved] = useState<ProjectInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>(initialTab ?? "recent");
 
@@ -131,13 +147,16 @@ export function ProjectStep({ data, onChange, initialTab }: Props) {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
-    fetchSessions().then((envelope) => {
-      if (envelope) {
-        const projects = collectRecentProjects(envelope.sessions).slice(0, 6);
-        setRecent(projects);
-        if (projects.length === 0 && !initialTab) {
-          setActiveTab("browse");
-        }
+    Promise.all([fetchSessions(), fetchProjects()]).then(([envelope, savedProjects]) => {
+      const recents = envelope ? collectRecentProjects(envelope.sessions).slice(0, 6) : [];
+      const split = splitSavedAndRecent(savedProjects, recents);
+      setSaved(split.saved);
+      setRecent(split.recent);
+      // Default to Browse only when there is nothing to pick from either
+      // source; a user with saved projects but no sessions should still
+      // land on the Recent tab.
+      if (split.saved.length === 0 && split.recent.length === 0 && !initialTab) {
+        setActiveTab("browse");
       }
       setLoading(false);
     });
@@ -149,7 +168,13 @@ export function ProjectStep({ data, onChange, initialTab }: Props) {
     return recent.filter((r) => r.path.toLowerCase().includes(q) || r.displayName.toLowerCase().includes(q));
   }, [recent, data.path]);
 
-  const hasRecents = recent.length > 0;
+  const filteredSaved = useMemo(() => {
+    if (!data.path) return saved;
+    const q = data.path.toLowerCase();
+    return saved.filter((s) => s.path.toLowerCase().includes(q) || s.name.toLowerCase().includes(q));
+  }, [saved, data.path]);
+
+  const hasPicks = recent.length > 0 || saved.length > 0;
 
   const handleBrowseSelect = (path: string) => {
     onChange("path", path);
@@ -179,7 +204,7 @@ export function ProjectStep({ data, onChange, initialTab }: Props) {
   };
 
   const tabs: { id: Tab; label: string }[] = [
-    ...(hasRecents ? [{ id: "recent" as Tab, label: "Recent" }] : []),
+    ...(hasPicks ? [{ id: "recent" as Tab, label: "Recent" }] : []),
     { id: "browse", label: "Browse" },
     { id: "clone", label: "Clone URL" },
   ];
@@ -253,37 +278,73 @@ export function ProjectStep({ data, onChange, initialTab }: Props) {
             </div>
           )}
 
-          {/* Recent projects tab */}
-          {!loading && activeTab === "recent" && hasRecents && (
-            <div className="flex flex-col gap-1.5">
-              {filteredRecent.map((r) => (
-                <button
-                  key={r.path}
-                  type="button"
-                  onClick={() => onChange("path", r.path)}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-md border transition-colors text-left cursor-pointer ${
-                    data.path === r.path
-                      ? "border-brand-600 bg-surface-900"
-                      : "border-surface-700/40 bg-surface-900 hover:border-surface-700 hover:bg-surface-850"
-                  }`}
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-text-primary truncate">{r.displayName}</span>
-                      <span className="text-[10px] font-mono text-text-dim shrink-0">{r.tool}</span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="font-mono text-[11px] text-text-dim truncate">{r.path}</span>
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end shrink-0 gap-0.5">
-                    <span className="text-[10px] text-text-dim">{timeAgo(r.lastAccessedAt)}</span>
-                    <span className="text-[10px] text-text-dim">
-                      {r.sessionCount} session{r.sessionCount !== 1 ? "s" : ""}
-                    </span>
-                  </div>
-                </button>
-              ))}
+          {/* Recent projects tab: saved (curated registry) on top, then
+              session-derived recents below. */}
+          {!loading && activeTab === "recent" && hasPicks && (
+            <div className="flex flex-col gap-4">
+              {filteredSaved.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-[10px] font-mono uppercase tracking-wider text-text-dim">Saved projects</p>
+                  {filteredSaved.map((s) => (
+                    <button
+                      key={`saved:${s.scope}:${s.path}`}
+                      type="button"
+                      onClick={() => onChange("path", s.path)}
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-md border transition-colors text-left cursor-pointer ${
+                        data.path === s.path
+                          ? "border-brand-600 bg-surface-900"
+                          : "border-surface-700/40 bg-surface-900 hover:border-surface-700 hover:bg-surface-850"
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-text-primary truncate">{s.name}</span>
+                          <span className="text-[10px] font-mono text-text-dim shrink-0">{s.scope}</span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="font-mono text-[11px] text-text-dim truncate">{s.path}</span>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {filteredRecent.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  {filteredSaved.length > 0 && (
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-text-dim">Recent</p>
+                  )}
+                  {filteredRecent.map((r) => (
+                    <button
+                      key={r.path}
+                      type="button"
+                      onClick={() => onChange("path", r.path)}
+                      className={`flex items-center gap-3 px-3 py-2.5 rounded-md border transition-colors text-left cursor-pointer ${
+                        data.path === r.path
+                          ? "border-brand-600 bg-surface-900"
+                          : "border-surface-700/40 bg-surface-900 hover:border-surface-700 hover:bg-surface-850"
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-text-primary truncate">{r.displayName}</span>
+                          <span className="text-[10px] font-mono text-text-dim shrink-0">{r.tool}</span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="font-mono text-[11px] text-text-dim truncate">{r.path}</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-end shrink-0 gap-0.5">
+                        <span className="text-[10px] text-text-dim">{timeAgo(r.lastAccessedAt)}</span>
+                        <span className="text-[10px] text-text-dim">
+                          {r.sessionCount} session{r.sessionCount !== 1 ? "s" : ""}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
